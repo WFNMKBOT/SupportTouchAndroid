@@ -44,14 +44,47 @@ jobs:
           fi
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Build APK
+      - name: Build debug APK
         run: |
           cd "$PROJECT_DIR"
           gradle assembleDebug
 
-      - name: Upload APK
+      - name: Sign APK with permanent keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
+            echo "Satu atau lebih GitHub Secrets belum diisi."
+            exit 1
+          fi
+
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/supporttouch-release.jks"
+
+          APK=$(find "$PROJECT_DIR" -path '*/build/outputs/apk/debug/*.apk' -type f | head -n 1)
+          if [ -z "$APK" ]; then
+            echo "APK hasil build tidak ditemukan."
+            exit 1
+          fi
+
+          BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks "$RUNNER_TEMP/supporttouch-release.jks" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASSWORD \
+            --key-pass env:KEY_PASSWORD \
+            --out "$PROJECT_DIR/SupportTouch-signed.apk" \
+            "$APK"
+
+          "$BUILD_TOOLS/apksigner" verify --verbose "$PROJECT_DIR/SupportTouch-signed.apk"
+
+      - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
           name: SupportTouchAndroid-APK
-          path: extracted/**/build/outputs/apk/debug/*.apk
+          path: ${{ env.PROJECT_DIR }}/SupportTouch-signed.apk
           if-no-files-found: error
